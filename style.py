@@ -12,4 +12,26 @@ QLineEdit {
     color: white;
     background: transparent;
 }
+
+QListWidget {
+    background-color: #1e1e1e;
+    border: none;
+    color: white;
+    font-size: 16px;
+}
+
+QListWidget::item:selected {
+    background-color: #333;
+}
+
+QPushButton {
+    background: transparent;
+    color: white;
+    border: none;
+    font-size: 16px;
+}
+
+QPushButton:hover {
+    color: #ff5555;
+}
 """

@@ -16,6 +16,6 @@ def hotkey_trigger():
     QTimer.singleShot(0, launcher.open_launcher)
 
 
-keyboard.add_hotkey("ctrl+alt+space", hotkey_trigger)
+keyboard.add_hotkey("ctrl+alt+space", hotkey_trigger, suppress=True)
 
 sys.exit(app.exec())
