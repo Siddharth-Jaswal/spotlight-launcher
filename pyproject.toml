@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "spotlight-sid"
+version = "0.1.0"
+description = "Spotlight-style launcher with global hotkey"
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+    "PyQt6",
+    "pynput",
+    "rapidfuzz",
+]
+
+[project.scripts]
+spotlight-sid = "main:run_cli"
+
+[tool.setuptools]
+py-modules = ["main", "launcher", "style"]
