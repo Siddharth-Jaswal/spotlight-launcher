@@ -28,21 +28,48 @@ QLineEdit:focus {
     background-color: rgba(255, 255, 255, 0.95);
 }
 
-QListWidget {
+QListWidget#SuggestionList {
     background-color: rgba(255, 255, 255, 0.96);
     border: 1px solid rgba(184, 184, 191, 0.9);
-    border-top: none;
-    border-bottom-left-radius: 14px;
-    border-bottom-right-radius: 14px;
+    border-radius: 14px;
     color: #212124;
     font-size: 14px;
     outline: none;
-    padding: 6px;
+    padding: 4px 6px 6px 6px;
+}
+
+QListWidget#SuggestionList::item {
+    border-radius: 9px;
+    color: #212124;
+    padding: 9px 12px;
+    margin: 1px 0;
+}
+
+QListWidget#SuggestionList::item:hover {
+    background-color: #f1f2f5;
+}
+
+QListWidget#SuggestionList::item:selected,
+QListWidget#SuggestionList::item:selected:active,
+QListWidget#SuggestionList::item:selected:!active {
+    background-color: #0a84ff;
+    color: #ffffff;
+    border: none;
+}
+
+QListWidget {
+    background-color: #ffffff;
+    border: 1px solid #d8d8de;
+    border-radius: 10px;
+    color: #212124;
+    font-size: 14px;
+    outline: none;
+    padding: 4px;
 }
 
 QListWidget::item {
-    border-radius: 9px;
-    padding: 7px 10px;
+    border-radius: 8px;
+    padding: 6px 8px;
     margin: 1px 0;
 }
 

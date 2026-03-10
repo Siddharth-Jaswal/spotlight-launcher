@@ -1,6 +1,7 @@
 __pycache__/
 *.pyc
 *.pyo
+app.bat
 *.pyd
 .env
 .venv

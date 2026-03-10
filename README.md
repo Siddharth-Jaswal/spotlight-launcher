@@ -17,7 +17,30 @@ It runs in the background, opens with a global hotkey, and lets you launch apps,
 - Windows 10 or Windows 11
 - Python 3.10 or newer
 
-## First-Time Setup (Recommended for Your System)
+## Install Or Update
+
+For both first-time install and future updates, run:
+
+```powershell
+.\installer.bat
+```
+
+The script will:
+
+- find Python 3.10+ on your system or try to install it with `winget`
+- create a dedicated `.venv` inside this repo
+- install or update the app and dependencies in that virtual environment
+- create `app.bat` in the repo root to launch the GUI
+- create a `spotlight-sid.bat` shim in `%USERPROFILE%\spotlight-launcher-bin`
+- add `%USERPROFILE%\spotlight-launcher-bin` to your user `PATH`
+
+After the script finishes, open a new terminal and run:
+
+```powershell
+spotlight-sid
+```
+
+## Manual Setup (Fallback)
 
 Run these steps once on Windows PowerShell:
 
@@ -57,9 +80,11 @@ After launch, the process detaches and keeps running in the background.
 3. Add entries with:
    - `name`: unique command name you will search
    - `target`: the URL or shell command to execute
-   - `type`: `url` or `command`
+   - `folder path`: used when `type` is `folder`
+   - `type`: `url`, `command`, or `folder`
    - `aliases`: optional comma-separated shortcuts
-4. Click `Save Entry`, then `Done`.
+4. Optional: tick `Start launcher when Windows signs in` to launch it automatically at login.
+5. Click `Save Entry`, then `Done`.
 
 Example entries:
 
@@ -83,6 +108,12 @@ Example entries:
       "target": "notepad",
       "type": "command",
       "aliases": ["np"]
+    },
+    {
+      "name": "inetpub",
+      "target": "C:\\inetpub",
+      "type": "folder",
+      "aliases": ["iis"]
     }
   ]
 }
@@ -103,6 +134,8 @@ Top-left controls:
 - Red: exit launcher completely
 - Yellow: hide launcher
 - Green: open command manager
+
+In the manager dialog, you can also enable or disable Windows startup with a checkbox.
 
 ## Command Storage
 
@@ -126,10 +159,10 @@ python main.py
 
 ## Update After Pulling Changes
 
-If you installed with `pip install .`, reinstall after updates:
+Run the same script again:
 
 ```powershell
-python -m pip install --upgrade .
+.\installer.bat
 ```
 
 ## Troubleshooting
@@ -148,6 +181,7 @@ python -m pip install --upgrade .
 
 - Confirm the command works in PowerShell first
 - Use full paths when needed (for example: `"C:\Program Files\App\app.exe"`)
+- For folders, use the `folder` type and enter the directory path directly (for example: `C:\inetpub`)
 - For workspace commands like `code .`, ensure `code` is available in your PATH
 
 ## Project Structure

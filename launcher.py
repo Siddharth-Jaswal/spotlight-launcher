@@ -3,18 +3,28 @@ import json
 import os
 import shlex
 import subprocess
+import sys
+import sysconfig
 import webbrowser
 from typing import Any, Callable
+
+try:
+    import winreg
+except ImportError:  # pragma: no cover - non-Windows fallback
+    winreg = None
 
 from PyQt6.QtCore import QEasingCurve, QEvent, QPoint, QPropertyAnimation, Qt, QVariantAnimation
 from PyQt6.QtGui import QColor, QGuiApplication
 from PyQt6.QtWidgets import (
     QApplication,
+    QCheckBox,
     QComboBox,
     QDialog,
     QFormLayout,
+    QFrame,
     QGraphicsDropShadowEffect,
     QHBoxLayout,
+    QLabel,
     QLineEdit,
     QListWidget,
     QMessageBox,
@@ -29,10 +39,14 @@ from style import STYLE
 COMMANDS_FILE = "commands.json"
 COMMANDS_FILE_ENV = "SPOTLIGHT_COMMANDS_FILE"
 APP_DIR_NAME = "SpotlightLauncher"
+STARTUP_REG_PATH = r"Software\Microsoft\Windows\CurrentVersion\Run"
+STARTUP_VALUE_NAME = "SpotlightLauncher"
 WINDOW_WIDTH = 500
 WINDOW_BASE_HEIGHT = 60
-SUGGESTION_ROW_HEIGHT = 30
+SUGGESTION_ROW_HEIGHT = 38
 MAX_SUGGESTIONS = 5
+SUGGESTION_SIDE_MARGIN = 8
+SUGGESTION_BOTTOM_MARGIN = 8
 INPUT_X = 72
 INPUT_Y = 8
 INPUT_HEIGHT = 44
@@ -41,6 +55,73 @@ OPEN_CLOSE_ANIMATION_MS = 170
 HEIGHT_ANIMATION_MS = 140
 
 CommandEntry = dict[str, Any]
+
+
+class StartupManager:
+    """Manage Windows startup registration for the launcher."""
+
+    @staticmethod
+    def is_supported() -> bool:
+        return os.name == "nt" and winreg is not None
+
+    @staticmethod
+    def resolve_command() -> str:
+        scripts_dir = sysconfig.get_path("scripts") or ""
+        for candidate in (
+            "spotlight-sid.exe",
+            "spotlight-sid-script.pyw",
+            "spotlight-sid-script.py",
+        ):
+            script_path = os.path.join(scripts_dir, candidate)
+            if os.path.exists(script_path):
+                return f'"{script_path}"'
+
+        pythonw = sys.executable.replace("python.exe", "pythonw.exe")
+        python_executable = pythonw if os.path.exists(pythonw) else sys.executable
+        return f'"{python_executable}" -m main'
+
+    @staticmethod
+    def is_enabled() -> bool:
+        if not StartupManager.is_supported():
+            return False
+
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_CURRENT_USER,
+                STARTUP_REG_PATH,
+                0,
+                winreg.KEY_READ,
+            ) as key:
+                value, _ = winreg.QueryValueEx(key, STARTUP_VALUE_NAME)
+                return str(value).strip() == StartupManager.resolve_command()
+        except (FileNotFoundError, OSError):
+            return False
+
+    @staticmethod
+    def set_enabled(enabled: bool) -> None:
+        if not StartupManager.is_supported():
+            raise OSError("Windows startup is only supported on Windows.")
+
+        with winreg.OpenKey(
+            winreg.HKEY_CURRENT_USER,
+            STARTUP_REG_PATH,
+            0,
+            winreg.KEY_SET_VALUE,
+        ) as key:
+            if enabled:
+                winreg.SetValueEx(
+                    key,
+                    STARTUP_VALUE_NAME,
+                    0,
+                    winreg.REG_SZ,
+                    StartupManager.resolve_command(),
+                )
+                return
+
+            try:
+                winreg.DeleteValue(key, STARTUP_VALUE_NAME)
+            except FileNotFoundError:
+                pass
 
 
 class CommandManagerDialog(QDialog):
@@ -64,16 +145,24 @@ class CommandManagerDialog(QDialog):
         self.list_widget = QListWidget()
         self.name_input = QLineEdit()
         self.target_input = QLineEdit()
+        self.folder_input = QLineEdit()
         self.type_input = QComboBox()
-        self.type_input.addItems(["url", "command"])
+        self.type_input.addItems(["url", "command", "folder"])
         self.aliases_input = QLineEdit()
         self.aliases_input.setPlaceholderText("alias1, alias2")
+        self.startup_checkbox = QCheckBox("Start launcher when Windows signs in")
+        self.target_label = QLabel("Target")
+        self.folder_label = QLabel("Folder Path")
+        self.target_input.setPlaceholderText("https://example.com or notepad")
+        self.folder_input.setPlaceholderText(r"C:\inetpub")
 
         form = QFormLayout()
         form.addRow("Name", self.name_input)
-        form.addRow("Target", self.target_input)
+        form.addRow(self.target_label, self.target_input)
+        form.addRow(self.folder_label, self.folder_input)
         form.addRow("Type", self.type_input)
         form.addRow("Aliases", self.aliases_input)
+        form.addRow("", self.startup_checkbox)
 
         editor_layout = QVBoxLayout()
         editor_layout.addLayout(form)
@@ -101,6 +190,7 @@ class CommandManagerDialog(QDialog):
         self.setLayout(content)
 
         self.list_widget.currentRowChanged.connect(self._load_entry_into_form)
+        self.type_input.currentTextChanged.connect(self._sync_type_fields)
         self.new_btn.clicked.connect(self._new_entry)
         self.save_btn.clicked.connect(self._save_entry)
         self.delete_btn.clicked.connect(self._delete_entry)
@@ -108,14 +198,18 @@ class CommandManagerDialog(QDialog):
         self.cancel_btn.clicked.connect(self.reject)
 
         self._refresh_list()
+        self._sync_type_fields(self.type_input.currentText())
+        self._sync_startup_checkbox()
 
     @staticmethod
     def _normalized_entry(entry: CommandEntry) -> CommandEntry:
         name = str(entry.get("name", "")).strip().lower()
         target = str(entry.get("target", "")).strip()
         cmd_type = str(entry.get("type", "")).strip().lower()
-        if cmd_type not in {"url", "command"}:
+        if cmd_type not in {"url", "command", "folder"}:
             cmd_type = "url" if target.startswith("http") else "command"
+            if target and os.path.isdir(CommandManagerDialog._expand_target_path(target)):
+                cmd_type = "folder"
 
         aliases = []
         for alias in entry.get("aliases", []):
@@ -155,8 +249,10 @@ class CommandManagerDialog(QDialog):
         self.list_widget.clearSelection()
         self.name_input.clear()
         self.target_input.clear()
+        self.folder_input.clear()
         self.type_input.setCurrentText("url")
         self.aliases_input.clear()
+        self._sync_type_fields("url")
         self.name_input.setFocus()
 
     def _load_entry_into_form(self, row: int):
@@ -167,14 +263,24 @@ class CommandManagerDialog(QDialog):
         self.editing_index = row
         entry = self.entries[row]
         self.name_input.setText(entry["name"])
-        self.target_input.setText(entry["target"])
         self.type_input.setCurrentText(entry["type"])
+        if entry["type"] == "folder":
+            self.folder_input.setText(entry["target"])
+            self.target_input.clear()
+        else:
+            self.target_input.setText(entry["target"])
+            self.folder_input.clear()
         self.aliases_input.setText(", ".join(entry.get("aliases", [])))
+        self._sync_type_fields(entry["type"])
 
     def _build_entry_from_form(self) -> CommandEntry | None:
         name = self.name_input.text().strip().lower()
-        target = self.target_input.text().strip()
         cmd_type = self.type_input.currentText().strip().lower()
+        target = (
+            self.folder_input.text().strip()
+            if cmd_type == "folder"
+            else self.target_input.text().strip()
+        )
 
         aliases = []
         for alias in self.aliases_input.text().split(","):
@@ -195,6 +301,30 @@ class CommandManagerDialog(QDialog):
             "type": cmd_type,
             "aliases": aliases,
         }
+
+    @staticmethod
+    def _expand_target_path(target: str) -> str:
+        return os.path.normpath(os.path.expandvars(os.path.expanduser(target.strip())))
+
+    def _sync_type_fields(self, cmd_type: str):
+        is_folder = cmd_type.strip().lower() == "folder"
+        self.target_label.setVisible(not is_folder)
+        self.target_input.setVisible(not is_folder)
+        self.folder_label.setVisible(is_folder)
+        self.folder_input.setVisible(is_folder)
+
+    def _sync_startup_checkbox(self):
+        if not StartupManager.is_supported():
+            self.startup_checkbox.setChecked(False)
+            self.startup_checkbox.setEnabled(False)
+            self.startup_checkbox.setToolTip("Startup toggle is only available on Windows.")
+            return
+
+        self.startup_checkbox.setEnabled(True)
+        self.startup_checkbox.setToolTip(
+            "Launch Spotlight Launcher automatically after you sign in to Windows."
+        )
+        self.startup_checkbox.setChecked(StartupManager.is_enabled())
 
     def _save_entry(self):
         entry = self._build_entry_from_form()
@@ -240,6 +370,18 @@ class CommandManagerDialog(QDialog):
     def _emit_entries_changed(self):
         if callable(self.on_entries_changed):
             self.on_entries_changed(copy.deepcopy(self.entries))
+
+    def accept(self):
+        try:
+            StartupManager.set_enabled(self.startup_checkbox.isChecked())
+        except OSError as error:
+            QMessageBox.warning(
+                self,
+                "Startup Update Failed",
+                f"Could not update the Windows startup setting.\n\n{error}",
+            )
+            return
+        super().accept()
 
 
 class Launcher(QWidget):
@@ -311,13 +453,20 @@ class Launcher(QWidget):
         self.input.returnPressed.connect(self.execute)
 
         self.list = QListWidget(self)
+        self.list.setObjectName("SuggestionList")
         self.list.setGeometry(
-            0,
+            SUGGESTION_SIDE_MARGIN,
             self.base_height,
-            WINDOW_WIDTH,
+            WINDOW_WIDTH - (SUGGESTION_SIDE_MARGIN * 2),
             self.max_suggestions * self.suggestion_row_height,
         )
+        self.list.setFrameShape(QFrame.Shape.NoFrame)
         self.list.setSpacing(1)
+        self.list.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self.list.setTextElideMode(Qt.TextElideMode.ElideRight)
+        self.list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.list.setUniformItemSizes(True)
         self.list.hide()
 
         self.input.textChanged.connect(self.update_suggestions)
@@ -486,6 +635,12 @@ class Launcher(QWidget):
         for match in matches:
             self.list.addItem(match)
 
+        row_height = max(
+            SUGGESTION_ROW_HEIGHT,
+            self.list.sizeHintForRow(0) if self.list.count() > 0 else SUGGESTION_ROW_HEIGHT,
+        )
+        self.suggestion_row_height = row_height
+
         if self.list.count() == 0:
             self._hide_suggestions()
             return
@@ -610,7 +765,7 @@ class Launcher(QWidget):
 
     def _show_suggestions(self):
         item_count = min(self.list.count(), self.max_suggestions)
-        list_height = item_count * self.suggestion_row_height
+        list_height = item_count * self.suggestion_row_height + SUGGESTION_BOTTOM_MARGIN
         self._animate_height(self.base_height + list_height, show_list=True)
 
     def _hide_suggestions(self):
@@ -622,12 +777,32 @@ class Launcher(QWidget):
         self.input.clear()
         self._hide_suggestions()
 
+    @staticmethod
+    def _expand_target_path(target: str) -> str:
+        return os.path.normpath(os.path.expandvars(os.path.expanduser(target.strip())))
+
     def _launch_target(self, entry: CommandEntry):
         target = entry["target"]
         entry_type = entry.get("type", "")
 
         if entry_type == "url" or target.startswith("http"):
             webbrowser.open(target)
+            return
+
+        resolved_target = self._expand_target_path(target)
+        if entry_type == "folder" or os.path.isdir(resolved_target):
+            try:
+                if os.name == "nt":
+                    os.startfile(resolved_target)
+                else:
+                    proc = subprocess.Popen([resolved_target])
+                    self._processes.append(proc)
+            except OSError as error:
+                QMessageBox.warning(
+                    self,
+                    "Launch Failed",
+                    f"Could not open folder:\n{target}\n\n{error}",
+                )
             return
 
         try:
@@ -714,14 +889,19 @@ class Launcher(QWidget):
         current_height = int(value)
         list_height = max(0, current_height - self.base_height)
         self.setFixedHeight(current_height)
-        self.list.setGeometry(0, self.base_height, WINDOW_WIDTH, list_height)
+        self.list.setGeometry(
+            SUGGESTION_SIDE_MARGIN,
+            self.base_height,
+            WINDOW_WIDTH - (SUGGESTION_SIDE_MARGIN * 2),
+            list_height,
+        )
 
     def _finalize_height(self, target_height: int, show_list: bool):
         self.setFixedHeight(target_height)
         self.list.setGeometry(
-            0,
+            SUGGESTION_SIDE_MARGIN,
             self.base_height,
-            WINDOW_WIDTH,
+            WINDOW_WIDTH - (SUGGESTION_SIDE_MARGIN * 2),
             max(0, target_height - self.base_height),
         )
         if not show_list:
